@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#14161d" />
+<title>THE MEME GAME — 4 levels of betrayal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<!-- TOP CONTROL BAR (always visible) -->
+<div id="topbar">
+  <button id="btn-theme" class="ic-btn" aria-label="Toggle theme"><span id="ic-theme"></span></button>
+  <button id="btn-mute" class="ic-btn" aria-label="Toggle sound"><span id="ic-mute"></span></button>
+  <button id="btn-fs" class="ic-btn" aria-label="Toggle fullscreen"><span id="ic-fs"></span></button>
+</div>
+
+<div id="stage">
+  <canvas id="game" width="960" height="540"></canvas>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div class="hud-left">
+      <span id="hud-levelnum" class="pill">1</span>
+      <span id="hud-levelname">FLOOR? NEVER HEARD OF HER</span>
+      <span id="hud-topic"></span>
+    </div>
+    <div class="hud-right">
+      <span id="hud-coins-wrap" class="hidden"><span class="coin-dot"></span><span id="hud-coins">0</span></span>
+      <span class="skull">&#9760;</span><span id="hud-deaths">0</span>
+      <button id="hud-hint-btn" aria-label="Show strategy">?</button>
+      <span class="hint">R&nbsp;restart</span>
+    </div>
+  </div>
+
+  <!-- STRATEGY CARD (from level_strategies.txt) -->
+  <div id="hint-frame" class="hidden"><div id="hint-card">
+    <div class="hint-head">
+      <span class="hint-tag">SAFE MOVE</span>
+      <span id="hint-topic"></span>
+    </div>
+    <p><b>What happens</b><span id="hint-what"></span></p>
+    <p class="hint-good"><b>Safe move</b><span id="hint-safe"></span></p>
+    <p class="hint-bad"><b>Common mistake</b><span id="hint-oops"></span></p>
+    <button id="hint-close">got it (H)</button>
+  </div></div>
+
+  <!-- MENU -->
+  <div id="menu">
+    <div class="menu-inner">
+      <div class="devil-face">
+        <div class="horn left"></div>
+        <div class="horn right"></div>
+        <div class="face">
+          <div class="eye l"></div>
+          <div class="eye r"></div>
+          <div class="grin"></div>
+        </div>
+      </div>
+      <h1 class="title"><span class="t-fable">THE MEME</span><span class="t-devil">GAME</span></h1>
+      <p class="subtitle">4 levels. the floor is lying. <span class="wink">;)</span></p>
+      <button id="play-btn">PLAY</button>
+      <button id="guide-btn" class="ghost-btn">WALKTHROUGH</button>
+      <div class="grid-label">levels</div>
+      <div id="level-grid"></div>
+      <p class="menu-deaths">total deaths: <span id="menu-deaths">0</span></p>
+      <p class="controls-hint">&larr; &rarr; / A D move &nbsp;&middot;&nbsp; &uarr; / W / SPACE jump &nbsp;&middot;&nbsp; &darr; / S flip &nbsp;&middot;&nbsp; H hint</p>
+    </div>
+  </div>
+
+  <!-- WALKTHROUGH -->
+  <div id="guide-screen" class="hidden">
+    <div class="guide-inner">
+      <h2 class="guide-title">WALKTHROUGH — LEVELS 1–18</h2>
+      <p class="guide-sub">Skim to your level, copy the safe move, retry with calm timing. Treat each level like a memory puzzle, not a speedrun.</p>
+      <div id="guide-list"></div>
+      <button id="guide-back">BACK</button>
+    </div>
+  </div>
+
+  <!-- END SCREEN -->
+  <div id="end-screen" class="hidden">
+    <div class="menu-inner">
+      <h1 class="end-title">YOU BEAT<br>THE MEME</h1>
+      <p class="end-sub">...this time.</p>
+      <p class="end-stats">you died <span id="end-deaths">0</span> times. <span id="end-roast"></span></p>
+      <button id="end-menu-btn">BACK TO MENU</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOUCH CONTROLS (mobile only) -->
+<div id="touch-controls" class="hidden">
+  <div class="tc-group tc-move">
+    <button id="tc-left" class="tc-btn" aria-label="Move left">
+      <svg viewBox="0 0 24 24" width="30" height="30"><path d="M15 5 L7 12 L15 19" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="tc-right" class="tc-btn" aria-label="Move right">
+      <svg viewBox="0 0 24 24" width="30" height="30"><path d="M9 5 L17 12 L9 19" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+  <div class="tc-group tc-actions">
+    <button id="tc-restart" class="tc-btn tc-small" aria-label="Restart level">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 12 a8 8 0 1 1 2.4 5.7 M4 12 V6 M4 12 H10" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="tc-flip" class="tc-btn tc-small hidden" aria-label="Flip gravity">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 4 L8 20 M8 20 L5 16.5 M8 20 L11 16.5 M16 20 L16 4 M16 4 L13 7.5 M16 4 L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button id="tc-jump" class="tc-btn tc-jump" aria-label="Jump">
+      <svg viewBox="0 0 24 24" width="34" height="34"><path d="M5 15 L12 7 L19 15" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- portrait rotate hint -->
+<div id="rotate-hint">↻ rotate your phone for a bigger view</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "@vercel/analytics": "https://esm.sh/@vercel/analytics@2.0.1"
+  }
+}
+</script>
+<script type="module" src="analytics.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

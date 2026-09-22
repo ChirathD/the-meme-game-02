@@ -1,0 +1,22 @@
+{
+  "name": "the-meme-game-02",
+  "version": "1.0.0",
+  "description": "THE MEME GAME (short cut) — the first 4 levels of the browser rage-platformer, traps and strategy cards following level_strategies.txt.",
+  "main": "game.js",
+  "scripts": {
+    "start": "npx serve .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "game",
+    "platformer",
+    "rage-game",
+    "canvas",
+    "browser"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@vercel/analytics": "^2.0.1"
+  }
+}
