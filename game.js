@@ -813,20 +813,31 @@ class Spring {
 }
 
 class Saw {
-  // spinning blade gliding along a polyline (ping-pong).
+  // spinning blade gliding along a polyline (ping-pong by default).
   constructor(path, opts = {}) {
     this.path = path.map((p) => ({ ...p }));
     this.r = opts.r ?? 22;
     this.speed = opts.speed ?? 130;
+    // dormant (invisible and harmless) until the trigger fires; null = always on
+    this.trigger = opts.trigger ?? null;
+    // one pass down the path instead of bouncing back and forth. It stays where
+    // it stops, and stays lethal there.
+    this.once = opts.once ?? false;
     this.reset();
   }
   reset() {
     this.seg = 0; this.dir = 1; this.f = 0; this.spin = 0;
     this.x = this.path[0].x; this.y = this.path[0].y;
+    this.active = !this.trigger; this.done = false;
   }
-  update(dt) {
+  update(dt, g) {
+    if (!this.active) {
+      if (!triggered(g, this.trigger)) return;
+      this.active = true;
+      AudioFX.rumble();
+    }
     this.spin += dt * 9;
-    if (this.path.length < 2) return;
+    if (this.done || this.path.length < 2) return;
     const a = this.path[this.seg];
     const b = this.path[this.seg + this.dir];
     if (!b) { this.dir *= -1; return; }
@@ -836,6 +847,12 @@ class Saw {
       this.f -= 1;
       this.seg += this.dir;
       if (this.seg + this.dir < 0 || this.seg + this.dir >= this.path.length) {
+        if (this.once) {
+          const end = this.path[this.path.length - 1];
+          this.x = end.x; this.y = end.y;
+          this.done = true; this.f = 0;
+          return;
+        }
         this.dir *= -1;
       }
     }
@@ -844,8 +861,11 @@ class Saw {
     this.y = lerp(a2.y, b2.y, this.f);
   }
   solids() { return []; }
-  kills() { return [R(this.x - this.r * 0.66, this.y - this.r * 0.66, this.r * 1.32, this.r * 1.32)]; }
-  draw() { drawBlade(this.x, this.y, this.r, this.spin, 10); }
+  kills() {
+    if (!this.active) return [];
+    return [R(this.x - this.r * 0.66, this.y - this.r * 0.66, this.r * 1.32, this.r * 1.32)];
+  }
+  draw() { if (this.active) drawBlade(this.x, this.y, this.r, this.spin, 10); }
 }
 
 class Laser {
@@ -1722,7 +1742,12 @@ class Door {
     this.w = 38; this.h = 64;
     this.reset();
   }
-  reset() { this.i = 0; this.poofT = 0; }
+  reset() {
+    this.i = 0; this.poofT = 0;
+    // doorDrive levels move the door as a physics body; these are its state
+    this.vx = 0; this.vy = 0; this.grounded = false;
+  }
+  body() { return R(this.pos.x, this.pos.y, this.w, this.h); }
   get pos() { return this.positions[this.i]; }
   update(dt, g) {
     this.poofT = Math.max(0, this.poofT - dt);
@@ -1809,6 +1834,12 @@ const STRATEGY = [
     what: "Ground spikes pop when you approach certain tiles.",
     safe: "Pause for a split second before each jump to confirm the spike timing.",
     oops: "Speedrunning the level and jumping blind into a trigger tile.",
+  },
+  {
+    topic: "The door drives, not you",
+    what: "Your controls are wired to the exit instead of to you, and mirrored: right drives the door left, left drives it right. The door falls, lands and dies like a player. There is a spiked hole in the way, a blade that drops in behind the door once it is past the hole and chases it the whole way, and spikes that pop up near the end. You never move at all.",
+    safe: "Hold right and keep the door moving - it is barely faster than the blade, so every wasted moment is ground lost. Jump the hole, keep going, and jump the spikes near the end without stopping.",
+    oops: "Reading the controls the normal way and shoving the door off the far side, walking it into the hole, or hesitating once the blade is up and letting it catch the door from behind.",
   },
 ];
 
@@ -1923,6 +1954,37 @@ const LEVELS = [
           delay: 0.06, slide: { dx: -0, speed: 500, on: "trigger", after: 0.5 },
         }),
         new Note(126, 420, "pause. then jump. i'm serious."),
+      ],
+    }),
+  },
+  // ---------------------------------------------------- 5 — the door drives
+  {
+    name: "YOU'RE NOT THE MAIN CHARACTER",
+    build: () => ({
+      // the input no longer belongs to you: it drives the DOOR, mirrored, and the
+      // door falls, collides and dies exactly like a player would. You just stand
+      // on the spawn tile and watch.
+      doorDrive: { speed: 265 },
+      spawn: { x: 56, y: 440 },
+      door: new Door([{ x: 920, y: 416 }]),
+      solids: [floorSeg(0, 800), floorSeg(900, 960), wallL(), wallR()],
+      traps: [
+        // the hole the door has to clear on its way to you — it is the door that
+        // falls in, and the door landing on spikes is what kills the run
+        new StaticSpikes(800, 540, 100, { dir: "up", size: 25 }),
+        // dormant until the door passes x=800; then it drops in at x=750 and makes
+        // a single run left at the player. No return trip — it stops where it ends
+        // and sits there, still lethal.
+        new Saw([{ x: 900, y: 430 }, { x: -20, y: 430 }], {
+          speed: 280, r: 20, once: true,
+          trigger: (g) => g.level.door.pos.x <= 800,
+        }),
+        // NOTE: the trigger watches the DOOR, not the player — the player never
+        // leaves x=56 on this level, so a player-based test would already be true
+        // on the first frame and these would be up before anything happened.
+        new PopSpikes(200, 480, 60, (g) => g.level.door.pos.x <= 300, { delay: 0.12 }),
+        new Note(112, 430, "you don't move. it does."),
+        new Note(596, 372, "right means left. mind the hole.", { size: 13 }),
       ],
     }),
   },
@@ -2085,6 +2147,54 @@ const Game = {
     return out;
   },
 
+  // The door as a physics body: the same gravity, collision and lethality the
+  // player gets, steered by mirrored input. Returns true if it died this frame.
+  driveDoor(dt, dir, drive) {
+    const door = this.level.door, d = door.pos;
+    const speed = drive.speed ?? 265;
+
+    const target = -dir * speed;            // mirrored: right drags it left
+    const rate = 2600;
+    if (target > door.vx) door.vx = Math.min(target, door.vx + rate * dt);
+    else if (target < door.vx) door.vx = Math.max(target, door.vx - rate * dt);
+
+    if (drive.jump !== false && jumpBuffered > 0 && door.grounded) {
+      door.vy = -645; door.grounded = false; jumpBuffered = 0; AudioFX.jump();
+      spawnDust(d.x + door.w / 2, d.y + door.h, 4);
+    }
+    if (!heldJump() && door.vy < -220) door.vy = -220;
+    door.vy = clamp(door.vy + 2150 * dt, -980, 980);
+
+    const solids = this.collectSolids();
+    d.x += door.vx * dt;
+    for (const s of solids) {
+      if (aabb(door.body(), s)) {
+        if (door.vx > 0) d.x = s.x - door.w;
+        else if (door.vx < 0) d.x = s.x + s.w;
+        door.vx = 0;
+      }
+    }
+    d.y += door.vy * dt;
+    door.grounded = false;
+    for (const s of solids) {
+      if (aabb(door.body(), s)) {
+        if (door.vy > 0) { d.y = s.y - door.h; door.grounded = true; }
+        else if (door.vy < 0) d.y = s.y + s.h;
+        door.vy = 0;
+      }
+    }
+    d.x = clamp(d.x, drive.min ?? 0, drive.max ?? W - door.w);
+
+    // spikes and the void take the door exactly as they would take the player
+    for (const t of this.level.traps) {
+      for (const k of t.kills()) {
+        if (aabb(door.body(), k)) { this.die(d.x + door.w / 2, d.y + door.h / 2); return true; }
+      }
+    }
+    if (d.y > H + 40) { this.die(d.x + door.w / 2, H); return true; }
+    return false;
+  },
+
   updatePlay(dt) {
     const p = this.player;
     this.invertControls = false;
@@ -2099,6 +2209,17 @@ const Game = {
     if (heldLeft()) dir -= 1;
     if (heldRight()) dir += 1;
     if (this.invertControls) dir = -dir;
+
+    // `doorDrive` hijacks the input entirely: it drives the DOOR, mirrored — right
+    // sends it left, left sends it right. The door is a physics body like the
+    // player (gravity, solids, spikes, the void), and the player just stands
+    // there. Walking the door into the player is what finishes the level.
+    const drive = this.level.doorDrive;
+    if (drive) {
+      if (this.driveDoor(dt, dir, drive)) return;
+      dir = 0;
+    }
+
     if (dir !== 0) p.face = dir;
 
     const SPEED = 265;

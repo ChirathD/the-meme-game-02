@@ -133,7 +133,7 @@ const fail = (msg) => { failures++; console.error("  FAIL  " + msg); };
 
 // ================================================================ 1. structure
 console.log(`levels: ${LEVELS.length}   strategy entries: ${STRATEGY.length}\n`);
-if (LEVELS.length !== 4) fail(`expected 4 levels, found ${LEVELS.length}`);
+if (LEVELS.length !== 5) fail(`expected 5 levels, found ${LEVELS.length}`);
 if (STRATEGY.length !== LEVELS.length) fail("STRATEGY and LEVELS lengths disagree");
 
 // ================================================================ 2. build + simulate
@@ -180,6 +180,9 @@ if (!failures) console.log("  all levels build, draw and simulate cleanly\n");
 // W n stand still n frames, U<y hold course until above y (survives a teleport).
 const ROUTES = {
   4:  "R>240 J R>424 J R>690 J R>940",
+  // level 5 does not move the player at all — the input steers the door, so the
+  // route drives the door into place and then waits for the ledge to drop.
+  5:  "D<800 J D<300 W120",
 };
 
 function runRoute(level, plan) {
@@ -205,6 +208,13 @@ function runRoute(level, plan) {
       else if (c[0] === "U") { if (p.y < parseFloat(c.slice(2))) step++; }
       else if (c[0] === "J") { api.bufferJump(0.12); hold = 22; step++; }
       else if (c[0] === "W") { wait = parseInt(c.slice(1), 10); step++; }
+      // D<x / D>x — drive the DOOR past x. The controls are mirrored on those
+      // levels, so pressing right is what walks the door leftwards.
+      else if (c[0] === "D") {
+        const target = parseFloat(c.slice(2));
+        if (c[1] === "<") { setDir(1); if (G.level.door.pos.x < target) step++; }
+        else { setDir(-1); if (G.level.door.pos.x > target) step++; }
+      }
       else if (c[0] === "F") { G.tryFlip(); step++; }
     }
     keys["Space"] = hold > 0;
