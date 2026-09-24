@@ -133,7 +133,7 @@ const fail = (msg) => { failures++; console.error("  FAIL  " + msg); };
 
 // ================================================================ 1. structure
 console.log(`levels: ${LEVELS.length}   strategy entries: ${STRATEGY.length}\n`);
-if (LEVELS.length !== 5) fail(`expected 5 levels, found ${LEVELS.length}`);
+if (LEVELS.length !== 6) fail(`expected 6 levels, found ${LEVELS.length}`);
 if (STRATEGY.length !== LEVELS.length) fail("STRATEGY and LEVELS lengths disagree");
 
 // ================================================================ 2. build + simulate

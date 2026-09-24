@@ -1344,6 +1344,234 @@ class PopWall {
   }
 }
 
+class PushBox {
+  // a crate the player can shove along the ground. It falls like a body and
+  // counts as solid ground while it is there, so it can be walked on as well as
+  // walked into.
+  constructor(rect, opts = {}) {
+    this.home = { ...rect };
+    this.speed = opts.speed ?? 150;   // how fast it gives way when shoved
+    this.reset();
+  }
+  reset() { this.rect = { ...this.home }; this.vy = 0; this.capping = false; }
+  // this crate plus any crates it is already touching in the push direction, so
+  // shoving the first one drives the whole row
+  _chain(g, dir) {
+    const chain = [this];
+    for (let guard = 0; guard < 8; guard++) {
+      const last = chain[chain.length - 1].rect;
+      const next = g.level.traps.find((t) => {
+        if (!(t instanceof PushBox) || chain.includes(t)) return false;
+        const b = t.rect;
+        if (b.y + b.h <= last.y + 2 || b.y >= last.y + last.h - 2) return false;
+        return dir > 0
+          ? Math.abs(b.x - (last.x + last.w)) <= 3
+          : Math.abs(last.x - (b.x + b.w)) <= 3;
+      });
+      if (!next) break;
+      chain.push(next);
+    }
+    return chain;
+  }
+  // every solid in the level except this box itself
+  _others(g) {
+    const out = [...g.level.solids];
+    for (const t of g.level.traps) if (t !== this) out.push(...t.solids());
+    return out;
+  }
+  update(dt, g) {
+    const r = this.rect;
+    if (r.y > H + 200) return;          // gone down the hole; stop simulating
+    const p = g.player, others = this._others(g);
+
+    // Shoved sideways when the player is level with it and walking into it.
+    // NOTE: read the INPUT, not p.vx — the crate is solid, so the player's own
+    // collision resolution zeroes their vx the instant they touch it, and a
+    // vx-based test could therefore never fire.
+    let dir = 0;
+    if (heldRight()) dir += 1;
+    if (heldLeft()) dir -= 1;
+    if (g.invertControls) dir = -dir;
+
+    const levelWith = p.y + p.h > r.y + 2 && p.y < r.y + r.h - 2;
+    if (levelWith && dir !== 0) {
+      const touching = dir > 0
+        ? p.x + p.w >= r.x - 4 && p.x < r.x + r.w
+        : p.x <= r.x + r.w + 4 && p.x + p.w > r.x;
+      if (touching) {
+        // crates in front get shoved along too, so a row of them moves together
+        const chain = this._chain(g, dir);
+        let step = this.speed * dt;
+        for (const c of chain) {
+          const cr = c.rect;
+          // anything solid that is NOT part of the chain limits how far it goes
+          for (const sol of c._others(g)) {
+            if (chain.some((k) => k.rect === sol)) continue;
+            if (cr.y + cr.h <= sol.y + 1 || cr.y >= sol.y + sol.h - 1) continue;
+            const gap = dir > 0 ? sol.x - (cr.x + cr.w) : cr.x - (sol.x + sol.w);
+            if (gap >= 0) step = Math.min(step, gap);
+          }
+        }
+        for (const c of chain) c.rect.x += dir * step;
+      }
+    }
+
+    this.vy = clamp(this.vy + 2150 * dt, -980, 980);
+    const wasAbove = r.y + r.h;
+    r.y += this.vy * dt;
+    for (const s of others) {
+      if (aabb(r, s)) {
+        if (this.vy > 0) r.y = s.y - r.h;
+        else if (this.vy < 0) r.y = s.y + s.h;
+        this.vy = 0;
+      }
+    }
+
+    // spike beds hold the crate up: shove it into a pit and it caps the spikes,
+    // turning them into somewhere you can stand
+    this.capping = false;
+    if (this.vy >= 0) {
+      for (const t of g.level.traps) {
+        if (t === this) continue;
+        for (const k of t.kills()) {
+          if (aabb(r, k) && wasAbove <= k.y + 2) {
+            r.y = k.y - r.h; this.vy = 0; this.capping = true;
+          }
+        }
+      }
+    }
+  }
+  // the footprint the crate is shielding while it sits on a spike bed
+  cover() { return this.capping ? this.rect : null; }
+  solids() { return this.rect.y > H + 200 ? [] : [this.rect]; }
+  kills() { return []; }
+  draw() {
+    const r = this.rect;
+    if (r.y > H + 40) return;
+    ctx.fillStyle = theme.metal;
+    roundRect(r.x, r.y, r.w, r.h, 4); ctx.fill();
+    ctx.strokeStyle = theme.paper;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(r.x + 5, r.y + 5); ctx.lineTo(r.x + r.w - 5, r.y + r.h - 5);
+    ctx.moveTo(r.x + r.w - 5, r.y + 5); ctx.lineTo(r.x + 5, r.y + r.h - 5);
+    ctx.stroke();
+  }
+}
+
+class LiftPlatform {
+  // A weight-driven floating platform. Put weight on it and it travels to `to`;
+  // take the weight off and it returns to where it started. `to` can be above or
+  // below home, so the same class gives a riser and a sinker.
+  //   needs: "any"  — the player or a crate is enough (default)
+  //          "both" — it only moves with the player AND a crate aboard
+  constructor(rect, opts = {}) {
+    this.home = { ...rect };
+    this.speed = opts.speed ?? 70;                // rate while loaded
+    this.fall = opts.fall ?? opts.speed ?? 70;    // rate returning home
+    this.to = opts.to ?? opts.top ?? 0;           // where weight drives it
+    this.needs = opts.needs ?? "any";
+    this.reset();
+  }
+  reset() {
+    this.rect = { ...this.home };
+    this.moving = false; this.loaded = false;
+    this.breaking = null;   // seconds since it gave way, null while intact
+  }
+  // a body is riding if it overlaps horizontally and its feet are on the surface
+  _riding(b) {
+    const r = this.rect;
+    return b.x + b.w > r.x + 2 && b.x < r.x + r.w - 2 &&
+           Math.abs(b.y + b.h - r.y) <= 6;
+  }
+  // ...and this is the platform actually holding it up. A body straddling the
+  // seam between two platforms rides both, and if both claim it they seat it to
+  // different heights in the same frame — which leaves it overlapping one of
+  // them and the horizontal resolver flings it sideways. Highest surface wins,
+  // ties broken by trap order so the choice never flickers.
+  _carries(b, g) {
+    if (!this._riding(b)) return false;
+    const traps = g.level.traps, mine = traps.indexOf(this);
+    for (const t of traps) {
+      if (t === this || !(t instanceof LiftPlatform) || !t._riding(b)) continue;
+      if (t.rect.y < this.rect.y) return false;
+      if (t.rect.y === this.rect.y && traps.indexOf(t) < mine) return false;
+    }
+    return true;
+  }
+  update(dt, g) {
+    const r = this.rect, p = g.player;
+
+    // already given way: drop out from under everything, then restart the level
+    if (this.breaking !== null) {
+      this.breaking += dt;
+      r.y += 900 * dt;
+      if (this.breaking > 0.4) g.die(r.x + r.w / 2, Math.min(r.y + r.h / 2, H - 20));
+      return;
+    }
+
+    const crates = g.level.traps.filter((t) => t instanceof PushBox && this._carries(t.rect, g));
+
+    // Two crates at once is more than it will take — but only crates sitting
+    // wholly within the slab count. One hanging over an edge is not really on it.
+    const squarelyOn = crates.filter((c) =>
+      c.rect.x >= r.x - 0.5 && c.rect.x + c.rect.w <= r.x + r.w + 0.5);
+    if (squarelyOn.length >= 2) {
+      this.breaking = 0;
+      this.moving = false;
+      AudioFX.rumble();
+      g.shake(8, 0.35);
+      return;
+    }
+
+    const playerOn = this._carries(p, g);
+    this.loaded = this.needs === "both"
+      ? playerOn && crates.length > 0
+      : playerOn || crates.length > 0;
+
+    // loaded -> travel towards `to`; empty -> return to where it started
+    const goal = this.loaded ? this.to : this.home.y;
+    const rate = this.loaded ? this.speed : this.fall;
+    const delta = goal - r.y;
+    const dy = Math.sign(delta) * Math.min(rate * dt, Math.abs(delta));
+    this.moving = dy !== 0;
+    if (!this.moving) return;
+    r.y += dy;
+
+    // Seat the riders exactly on the new surface rather than nudging them by the
+    // same step. Nudging leaves sub-pixel overlap, and because a rider standing
+    // still has vx === 0 the horizontal resolver takes its "push out the nearest
+    // side" branch and fires them clean off the platform.
+    if (playerOn) { p.y = r.y - p.h; p.vy = 0; }
+    for (const c of crates) { c.rect.y = r.y - c.rect.h; c.vy = 0; }
+  }
+  solids() { return this.breaking !== null ? [] : [this.rect]; }
+  kills() { return []; }
+  draw() {
+    const r = this.rect;
+    if (r.y > H + 40) return;
+    ctx.save();
+    if (this.breaking !== null) {
+      ctx.globalAlpha = Math.max(0, 1 - this.breaking * 2);
+      ctx.translate(rand(-3, 3), rand(-3, 3));
+    }
+    ctx.fillStyle = theme.ink;
+    roundRect(r.x, r.y, r.w, r.h, 4); ctx.fill();
+    // little up-chevrons so it reads as a lift
+    ctx.strokeStyle = theme.paper;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const cx = r.x + r.w / 2 - 22 + i * 22;
+      ctx.moveTo(cx - 5, r.y + r.h / 2 + 3);
+      ctx.lineTo(cx, r.y + r.h / 2 - 3);
+      ctx.lineTo(cx + 5, r.y + r.h / 2 + 3);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 class Coin {
   // LEVEL 6 - bait. Optionally arms a flag that other traps listen to.
   constructor(x, y, opts = {}) {
@@ -1841,6 +2069,12 @@ const STRATEGY = [
     safe: "Hold right and keep the door moving - it is barely faster than the blade, so every wasted moment is ground lost. Jump the hole, keep going, and jump the spikes near the end without stopping.",
     oops: "Reading the controls the normal way and shoving the door off the far side, walking it into the hole, or hesitating once the blade is up and letting it catch the door from behind.",
   },
+  {
+    topic: "One ledge and a very long gap",
+    what: "A 60px ledge, then a 700px drop carpeted end to end with spikes, then the platform holding the door.",
+    safe: "Nothing about that gap is survivable on the way down - look for another way across.",
+    oops: "Stepping off the ledge on reflex.",
+  },
 ];
 
 const LEVELS = [
@@ -1988,6 +2222,38 @@ const LEVELS = [
       ],
     }),
   },
+  // ---------------------------------------------------- 6 — one ledge, one pit
+  {
+    name: "MIND THE GAP",
+    build: () => ({
+      spawn: { x: 16, y: 440 },
+      door: new Door([{ x: 876, y: 416 }]),
+      // any landing after a fall of more than 100px kills
+      maxDrop: 142,
+      // a 100px ledge to stand on, the spiked gap, and the door platform
+      solids: [
+        floorSeg(0, 100),
+        R(0, 150, 100, 16),          // upper ledge at the top of the riser's travel
+        R(200, 150, 10, 430),        // 10px divider between the two lifts
+        floorSeg(560, 960),          // door platform
+        wallL(), wallR(),
+      ],
+      traps: [
+        // spikes carpeting the full width of the gap
+        new StaticSpikes(60, 540, 500, { dir: "up", size: 44 }),
+        // crate sitting on the lip of the ledge — walk into it to shove it
+        new PushBox(R(75, 430, 25, 50)),
+        // crate waiting up on the high ledge, directly above the first one
+        new PushBox(R(75, 100, 25, 50)),
+        // riser: any weight sends it up to y=150, and it sinks back to y=480
+        // the moment it is empty
+        new LiftPlatform(R(100, 480, 100, 16), { speed: 70, fall: 70, to: 150 }),
+        // sinker: the mirror of it — parked at y=150, weight drives it DOWN to
+        // y=480, and it climbs back to 150 once it is empty
+        new LiftPlatform(R(210, 150, 100, 16), { speed: 70, fall: 70, to: 480 }),
+      ],
+    }),
+  },
 ];
 
 const DEATH_LINES = [
@@ -2060,6 +2326,7 @@ const Game = {
       grav: this.level.startGravity ?? 1,
       size: this.level.startSize ?? "normal",
       jumpsLeft: this.level.airJumps ?? 0,
+      apexY: s.y,                 // highest point of the current fall, for maxDrop
     };
   },
 
@@ -2281,6 +2548,21 @@ const Game = {
         p.vy = 0;
       }
     }
+    // Fall damage, when the level asks for it: measure the drop from the highest
+    // point reached since leaving the ground, and kill on a landing taller than
+    // `maxDrop`. Tracked against gravity's direction so flipped levels work too.
+    if (this.level.maxDrop) {
+      if (p.grounded) {
+        if (!wasGrounded && (p.y - p.apexY) * p.grav > this.level.maxDrop) {
+          this.die(p.x + p.w / 2, p.y + p.h / 2);
+          return;
+        }
+        p.apexY = p.y;
+      } else {
+        p.apexY = p.grav > 0 ? Math.min(p.apexY, p.y) : Math.max(p.apexY, p.y);
+      }
+    }
+
     if (p.grounded) p.jumpsLeft = this.level.airJumps ?? 0;
     p.squash = Math.max(0, p.squash - dt);
 
@@ -2291,9 +2573,14 @@ const Game = {
       }
     }
 
+    const covers = [];
+    for (const t of this.level.traps) if (t.cover) { const c = t.cover(); if (c) covers.push(c); }
     for (const t of this.level.traps) {
       for (const k of t.kills()) {
-        if (aabb(p, k)) { this.die(p.x + p.w / 2, p.y + p.h / 2); return; }
+        if (!aabb(p, k)) continue;
+        // a crate parked on the spikes shields whatever is under it
+        if (covers.some((c) => aabb(p, c))) continue;
+        this.die(p.x + p.w / 2, p.y + p.h / 2); return;
       }
     }
 
@@ -2629,12 +2916,11 @@ function buildLevelGrid() {
   const grid = document.getElementById("level-grid");
   grid.innerHTML = "";
   const done = getDone();
-  let unlockedUpTo = 0;
-  for (let i = 0; i < LEVELS.length; i++) { if (done[i]) unlockedUpTo = i + 1; }
   for (let i = 0; i < LEVELS.length; i++) {
     const b = document.createElement("button");
     b.textContent = i + 1;
-    b.disabled = i > unlockedUpTo;
+    // every level is open from the start — pick whichever one you want
+    b.disabled = false;
     if (done[i]) b.classList.add("done");
     b.addEventListener("click", () => startGame(i));
     grid.appendChild(b);

@@ -1,7 +1,7 @@
 {
   "name": "the-meme-game-02",
   "version": "1.0.0",
-  "description": "THE MEME GAME (short cut) — the first 5 levels of the browser rage-platformer, traps and strategy cards following level_strategies.txt.",
+  "description": "THE MEME GAME (short cut) — the first 6 levels of the browser rage-platformer, traps and strategy cards following level_strategies.txt.",
   "main": "game.js",
   "scripts": {
     "start": "npx serve .",
