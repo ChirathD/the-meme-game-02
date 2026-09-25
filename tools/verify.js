@@ -133,7 +133,7 @@ const fail = (msg) => { failures++; console.error("  FAIL  " + msg); };
 
 // ================================================================ 1. structure
 console.log(`levels: ${LEVELS.length}   strategy entries: ${STRATEGY.length}\n`);
-if (LEVELS.length !== 6) fail(`expected 6 levels, found ${LEVELS.length}`);
+if (LEVELS.length !== 7) fail(`expected 7 levels, found ${LEVELS.length}`);
 if (STRATEGY.length !== LEVELS.length) fail("STRATEGY and LEVELS lengths disagree");
 
 // ================================================================ 2. build + simulate
@@ -183,6 +183,13 @@ const ROUTES = {
   // level 5 does not move the player at all — the input steers the door, so the
   // route drives the door into place and then waits for the ledge to drop.
   5:  "D<800 J D<300 W120",
+  // level 7 is a timing puzzle on two synced platforms: ride up, hop the wall,
+  // cross to the second shaft, ride down, jump to the door platform
+  // level 7: ride up, hop the wall, cross to the second shaft, drop to the door
+  // platform — which makes the door bail out and reappear back at x=50 — then
+  // work all the way back across both shafts to reach it
+  7:  "R>187 J4 R>280 P0:150 J R>430 P1:150 J22 R>600 P1:480 J R>760 " +
+      "P1:480 L<716 J14 L<590 P1:150 J14 L<410 P0:150 J14 L<370 P0:480 J L<150 L<70",
 };
 
 function runRoute(level, plan) {
@@ -206,8 +213,16 @@ function runRoute(level, plan) {
       if (c[0] === "R") { setDir(1); if (p.x + p.w / 2 > parseFloat(c.slice(2))) step++; }
       else if (c[0] === "L") { setDir(-1); if (p.x + p.w / 2 < parseFloat(c.slice(2))) step++; }
       else if (c[0] === "U") { if (p.y < parseFloat(c.slice(2))) step++; }
-      else if (c[0] === "J") { api.bufferJump(0.12); hold = 22; step++; }
+      // J = full jump, Jn = hold the jump only n frames (a shorter hop)
+      else if (c[0] === "J") { api.bufferJump(0.12); hold = c.length > 1 ? parseInt(c.slice(1), 10) : 22; step++; }
       else if (c[0] === "W") { wait = parseInt(c.slice(1), 10); step++; }
+      // Pi:y — stand still until moving platform i has reached height y
+      else if (c[0] === "P") {
+        const [idx, ty] = c.slice(1).split(":").map(Number);
+        const pl = G.level.traps.filter((t) => t.constructor.name === "MovingPlatform")[idx];
+        setDir(0);
+        if (Math.abs(pl.py - ty) < 3) step++;
+      }
       // D<x / D>x — drive the DOOR past x. The controls are mirrored on those
       // levels, so pressing right is what walks the door leftwards.
       else if (c[0] === "D") {

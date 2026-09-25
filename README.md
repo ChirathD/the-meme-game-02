@@ -1,6 +1,6 @@
 # THE MEME GAME
 
-A 6-level browser rage-platformer built on the FableDevil engine. Every level is a
+A 7-level browser rage-platformer built on the FableDevil engine. Every level is a
 memory puzzle: the obvious floor is a lie, the obvious door is bait, and the walkthrough
 is built into the game.
 
@@ -46,12 +46,13 @@ level built around a platform that comes apart under you.
 | 4 | SPIKES? IN THIS ECONOMY? | Hidden spikes, pop timing |
 | 5 | YOU'RE NOT THE MAIN CHARACTER | You never move: mirrored controls drive the door itself, which falls and dies like a player. Walk it over a spiked hole and into you |
 | 6 | MIND THE GAP | A 60px ledge, a 700px spike-filled gap, and the far platform |
+| 7 | ROUND AND ROUND | A 60px ledge, a 700px gap swept by a saw, and the far platform |
 
 ## Strategy cards
 
 The walkthrough is playable, not external:
 
-- **WALKTHROUGH** on the menu lists all 6 entries — what happens, the safe move, and
+- **WALKTHROUGH** on the menu lists all 7 entries — what happens, the safe move, and
   the common mistake.
 - In-game, the **?** button (or `H`) shows the card for the level you're on.
 - After your third death on a level the card opens by itself.

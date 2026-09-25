@@ -688,6 +688,11 @@ class MovingPlatform {
     this.speed = opts.speed ?? 80;
     this.phase = opts.phase ?? 0;
     this.pause = opts.pause ?? 0;
+    // { when, dx, speed, back } — while `when` is true the whole platform slides
+    // `dx` sideways and stays there, yanking the landing spot out from under a
+    // jump that is already in the air. Once `back` is true the same trigger runs
+    // the other way and walks it home again.
+    this.shift = opts.shift ?? null;
     this.reset();
   }
   reset() {
@@ -695,6 +700,7 @@ class MovingPlatform {
     this.travel = dist / this.speed;
     this.cycle = this.travel * 2 + this.pause * 2;
     this.t = this.phase * this.cycle;
+    this.ox = 0; this.shifted = false; this.phase = 0;
     const p = this._posAt(this.t);
     this.px = p.x; this.py = p.y; this.dx = 0; this.dy = 0;
   }
@@ -711,14 +717,35 @@ class MovingPlatform {
   update(dt, g) {
     const prevx = this.px, prevy = this.py;
     this.t += dt;
+
+    // latch the sideways shift, then slide into it. phase 1 = shifted out,
+    // phase 2 = sent back home because `back` has come true.
+    if (this.shift) {
+      const goingBack = this.shift.back ? triggered(g, this.shift.back) : false;
+      if (triggered(g, this.shift.when)) {
+        const want = goingBack ? 2 : 1;
+        if (this.phase !== want) { this.phase = want; AudioFX.rumble(); }
+        this.shifted = true;
+      }
+      const goal = this.phase === 1 ? this.shift.dx : 0;
+      if (this.ox !== goal) {
+        const left = goal - this.ox;
+        this.ox += Math.sign(left) * Math.min((this.shift.speed ?? 420) * dt, Math.abs(left));
+      }
+    }
+
     const p = this._posAt(this.t);
-    this.px = p.x; this.py = p.y;
+    this.px = p.x + this.ox; this.py = p.y;
     this.dx = this.px - prevx; this.dy = this.py - prevy;
     const pl = g.player;
     const onTop = pl.vy >= -1 &&
       pl.x + pl.w > prevx + 2 && pl.x < prevx + this.w - 2 &&
       Math.abs((pl.y + pl.h) - prevy) <= 8;
-    if (onTop) { pl.x += this.dx; pl.y += this.dy; }
+    // Seat the rider on the surface rather than nudging them by dy. Nudging
+    // leaves sub-pixel overlap, and a rider standing still has vx === 0, so the
+    // horizontal resolver takes its "push out the nearest side" branch and fires
+    // them off the platform. Only bites once a platform moves vertically.
+    if (onTop) { pl.x += this.dx; pl.y = this.py - pl.h; pl.vy = 0; }
   }
   solids() { return [R(this.px, this.py, this.w, this.h)]; }
   kills() { return []; }
@@ -1968,17 +1995,46 @@ class Door {
     this.positions = positions.map((p) => ({ ...p }));
     this.fleeDist = opts.fleeDist ?? 110;
     this.w = 38; this.h = 64;
+    // { when, delay, after, to } — `delay` seconds after the first time `when` is
+    // true the door blinks out of existence, and `after` seconds later it turns up
+    // again at `to`. While it is gone it cannot be entered and is not drawn.
+    this.vanish = opts.vanish ?? null;
     this.reset();
   }
   reset() {
     this.i = 0; this.poofT = 0;
     // doorDrive levels move the door as a physics body; these are its state
     this.vx = 0; this.vy = 0; this.grounded = false;
+    this.vanishT = null; this.gone = false; this.armT = null;
   }
   body() { return R(this.pos.x, this.pos.y, this.w, this.h); }
   get pos() { return this.positions[this.i]; }
   update(dt, g) {
     this.poofT = Math.max(0, this.poofT - dt);
+
+    if (this.vanish) {
+      // arm on the trigger, then hold for `delay` before actually bailing out
+      if (this.armT === null && triggered(g, this.vanish.when)) this.armT = 0;
+      if (this.armT !== null && this.vanishT === null) {
+        this.armT += dt;
+        if (this.armT >= (this.vanish.delay ?? 0)) {
+          this.vanishT = 0;
+          this.gone = true;
+          spawnPoof(this.pos.x + this.w / 2, this.pos.y + this.h / 2);
+          AudioFX.poof();
+        }
+      } else if (this.gone) {
+        this.vanishT += dt;
+        if (this.vanishT >= (this.vanish.after ?? 3)) {
+          this.pos.x = this.vanish.to.x;
+          if (this.vanish.to.y !== undefined) this.pos.y = this.vanish.to.y;
+          this.gone = false;
+          this.poofT = 0.25;
+          spawnPoof(this.pos.x + this.w / 2, this.pos.y + this.h / 2);
+          AudioFX.laugh();
+        }
+      }
+    }
     if (this.i < this.positions.length - 1) {
       const p = g.player;
       const dx = (p.x + p.w / 2) - (this.pos.x + this.w / 2);
@@ -1994,10 +2050,12 @@ class Door {
     }
   }
   playerWins(p) {
+    if (this.gone) return false;
     const r = R(this.pos.x + 6, this.pos.y + 6, this.w - 12, this.h - 6);
     return this.i === this.positions.length - 1 && aabb(p, r);
   }
   draw() {
+    if (this.gone) return;
     const s = this.poofT > 0 ? 1 + this.poofT * 1.2 : 1;
     ctx.save();
     ctx.translate(this.pos.x + this.w / 2, this.pos.y + this.h);
@@ -2074,6 +2132,12 @@ const STRATEGY = [
     what: "A 60px ledge, then a 700px drop carpeted end to end with spikes, then the platform holding the door.",
     safe: "Nothing about that gap is survivable on the way down - look for another way across.",
     oops: "Stepping off the ledge on reflex.",
+  },
+  {
+    topic: "One ledge and a patrolling blade",
+    what: "Two vertical shafts between you and the door, split by a wall whose top is level with the top of the platforms' travel. Setting foot on the far platform makes the door vanish and turn up again back at the start, and spikes fill the doorway it left behind.",
+    safe: "Both platforms move the moment you leave the ground - the first retreats, the second runs away ahead of you - so never aim at where they are. Once the door bails out they reverse and go back to where they started, so the trip home needs the opposite aim again.",
+    oops: "Jumping at the platform you can see, and treating the far platform as the finish line.",
   },
 ];
 
@@ -2251,6 +2315,65 @@ const LEVELS = [
         // sinker: the mirror of it — parked at y=150, weight drives it DOWN to
         // y=480, and it climbs back to 150 once it is empty
         new LiftPlatform(R(210, 150, 100, 16), { speed: 70, fall: 70, to: 480 }),
+      ],
+    }),
+  },
+  // ---------------------------------------------------- 7 — two shafts, one wall
+  {
+    name: "ROUND AND ROUND",
+    build: () => ({
+      spawn: { x: 16, y: 440 },
+      // Touch the far platform and the door blinks out; three seconds later it
+      // reappears back at the start, at x=50.
+      door: new Door([{ x: 876, y: 416 }], {
+        vanish: {
+          when: (g) => g.player.x + g.player.w > 700 && g.player.grounded,
+          delay: 2,
+          after: 3,
+          to: { x: 50, y: 416 },
+        },
+      }),
+      // start floor, two vertical shafts split by a wall, then the door platform.
+      // The wall's top face sits at y=150, level with the top of both platforms'
+      // travel, so it doubles as the bridge between the two shafts.
+      solids: [
+        floorSeg(0, 200),
+        R(425, 150, 50, 430),       // wall separating the two shafts
+        floorSeg(700, 960),
+        R(0, 0, 200, 350),          // roof over each end; the shafts stay open
+        R(675, 0, 500, 350),
+        wallL(), wallR(),
+      ],
+      traps: [
+        // shaft 1: rides between the floor and the top of the wall, and slides
+        // 50px left the moment you are airborne past x=200 — so the spot you
+        // aimed at is not the spot you land on
+        new MovingPlatform(R(350, 480, 50, 16), {
+          toY: 150, speed: 70, pause: 1,
+          shift: {
+            when: (g) => g.player.x > 200 && !g.player.grounded,
+            dx: -100,
+            // only reverses once the door platform has been visited AND you are
+            // back on its near side; out past x=400 it still runs away from you
+            back: (g) => g.level.door.armT !== null && g.player.x < 400,
+          },
+        }),
+        // shaft 2: the same trick, armed once you are airborne past x=450
+        new MovingPlatform(R(500, 480, 50, 16), {
+          toY: 150, speed: 70, pause: 1,
+          // no `back` on this one: once it has run away to 575-625 it stays there,
+          // even after the door platform has been visited
+          shift: {
+            when: (g) => g.player.x > 450 && !g.player.grounded,
+            dx: 75,
+          },
+        }),
+        // the door is not your friend: walk up to it and it spits spikes out of
+        // its own doorway, right where you were about to stand
+        // spikes fill the old doorway the moment the door bails out — or the
+        // moment you walk up to it, whichever you manage first
+        new PopSpikes(874, 480, 42,
+          (g) => g.level.door.gone || g.player.x > 820, { delay: 0.04, size: 30 }),
       ],
     }),
   },
